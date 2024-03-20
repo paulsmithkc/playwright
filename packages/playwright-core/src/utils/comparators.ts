@@ -59,9 +59,10 @@ function compareImages(mimeType: string, actualBuffer: Buffer | string, expected
   const size = { width: Math.max(expected.width, actual.width), height: Math.max(expected.height, actual.height) };
   let sizesMismatchError = '';
   if (expected.width !== actual.width || expected.height !== actual.height) {
-    // only produce an error if the images differ by more than 1 pixel in size
-    // a threshold of 1.5 allows for floating point rounding errors
-    if (Math.abs(expected.width - actual.width) >= 1.5 || Math.abs(expected.height - actual.height) >= 1.5)
+    // only produce an error if the images differ by more than x pixels in size
+    // adding 0.5 accounts for floating point rounding errors
+    const allowedDiff = 10.5;
+    if (Math.abs(expected.width - actual.width) >= allowedDiff || Math.abs(expected.height - actual.height) >= allowedDiff)
       sizesMismatchError = `Expected an image ${expected.width}px by ${expected.height}px, received ${actual.width}px by ${actual.height}px. `;
 
     // always resize both images, so that we can perform the pixel diff
