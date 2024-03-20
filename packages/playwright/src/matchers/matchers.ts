@@ -17,14 +17,15 @@
 import type { Locator, Page, APIResponse } from 'playwright-core';
 import type { FrameExpectOptions } from 'playwright-core/lib/client/types';
 import { colors } from 'playwright-core/lib/utilsBundle';
-import { expectTypes, callLogText, filteredStackTrace } from '../util';
+import { expectTypes, callLogText } from '../util';
 import { toBeTruthy } from './toBeTruthy';
 import { toEqual } from './toEqual';
 import { toExpectedTextValues, toMatchText } from './toMatchText';
-import { captureRawStack, constructURLBasedOnBaseURL, isRegExp, isTextualMimeType, pollAgainstDeadline } from 'playwright-core/lib/utils';
+import { constructURLBasedOnBaseURL, isRegExp, isTextualMimeType, pollAgainstDeadline } from 'playwright-core/lib/utils';
 import { currentTestInfo } from '../common/globals';
-import { TestInfoImpl, type TestStepInternal } from '../worker/testInfo';
+import { TestInfoImpl } from '../worker/testInfo';
 import type { ExpectMatcherContext } from './expect';
+import { takeFirst } from '../common/config';
 
 interface LocatorEx extends Locator {
   _expect(expression: string, options: Omit<FrameExpectOptions, 'expectedValue'> & { expectedValue?: any }): Promise<{ matches: boolean, received?: any, log?: string[], timedOut?: boolean }>;
@@ -39,7 +40,7 @@ export function toBeAttached(
   locator: LocatorEx,
   options?: { attached?: boolean, timeout?: number },
 ) {
-  const attached = !options || options.attached === undefined || options.attached === true;
+  const attached = !options || options.attached === undefined || options.attached;
   const expected = attached ? 'attached' : 'detached';
   const unexpected = attached ? 'detached' : 'attached';
   const arg = attached ? '' : '{ attached: false }';
@@ -53,7 +54,7 @@ export function toBeChecked(
   locator: LocatorEx,
   options?: { checked?: boolean, timeout?: number },
 ) {
-  const checked = !options || options.checked === undefined || options.checked === true;
+  const checked = !options || options.checked === undefined || options.checked;
   const expected = checked ? 'checked' : 'unchecked';
   const unexpected = checked ? 'unchecked' : 'checked';
   const arg = checked ? '' : '{ checked: false }';
@@ -77,7 +78,7 @@ export function toBeEditable(
   locator: LocatorEx,
   options?: { editable?: boolean, timeout?: number },
 ) {
-  const editable = !options || options.editable === undefined || options.editable === true;
+  const editable = !options || options.editable === undefined || options.editable;
   const expected = editable ? 'editable' : 'readOnly';
   const unexpected = editable ? 'readOnly' : 'editable';
   const arg = editable ? '' : '{ editable: false }';
@@ -101,7 +102,7 @@ export function toBeEnabled(
   locator: LocatorEx,
   options?: { enabled?: boolean, timeout?: number },
 ) {
-  const enabled = !options || options.enabled === undefined || options.enabled === true;
+  const enabled = !options || options.enabled === undefined || options.enabled;
   const expected = enabled ? 'enabled' : 'disabled';
   const unexpected = enabled ? 'disabled' : 'enabled';
   const arg = enabled ? '' : '{ enabled: false }';
@@ -135,7 +136,7 @@ export function toBeVisible(
   locator: LocatorEx,
   options?: { visible?: boolean, timeout?: number },
 ) {
-  const visible = !options || options.visible === undefined || options.visible === true;
+  const visible = !options || options.visible === undefined || options.visible;
   const expected = visible ? 'visible' : 'hidden';
   const unexpected = visible ? 'hidden' : 'visible';
   const arg = visible ? '' : '{ visible: false }';
@@ -367,44 +368,28 @@ export async function toPass(
   } = {},
 ) {
   const testInfo = currentTestInfo();
-  const timeout = options.timeout !== undefined ? options.timeout : 0;
+  const timeout = takeFirst(options.timeout, testInfo?._projectInternal.expect?.toPass?.timeout, 0);
 
-  const rawStack = captureRawStack();
-  const stackFrames = filteredStackTrace(rawStack);
-
-  const runWithOrWithoutStep = async (callback: (step: TestStepInternal | undefined) => Promise<{ pass: boolean; message: () => string; }>) => {
-    if (!testInfo)
-      return await callback(undefined);
-    return await testInfo._runAsStep({
-      title: 'expect.toPass',
-      category: 'expect',
-      location: stackFrames[0],
-    }, callback);
-  };
-
-  return await runWithOrWithoutStep(async (step: TestStepInternal | undefined) => {
-    const { deadline, timeoutMessage } = testInfo ? testInfo._deadlineForMatcher(timeout) : TestInfoImpl._defaultDeadlineForMatcher(timeout);
-    const result = await pollAgainstDeadline<Error|undefined>(async () => {
-      if (testInfo && currentTestInfo() !== testInfo)
-        return { continuePolling: false, result: undefined };
-      try {
-        await callback();
-        return { continuePolling: !!this.isNot, result: undefined };
-      } catch (e) {
-        return { continuePolling: !this.isNot, result: e };
-      }
-    }, deadline, options.intervals || [100, 250, 500, 1000]);
-
-    if (result.timedOut) {
-      const message = result.result ? [
-        result.result.message,
-        '',
-        `Call Log:`,
-        `- ${timeoutMessage}`,
-      ].join('\n') : timeoutMessage;
-      step?.complete({ error: { message } });
-      return { message: () => message, pass: !!this.isNot };
+  const { deadline, timeoutMessage } = testInfo ? testInfo._deadlineForMatcher(timeout) : TestInfoImpl._defaultDeadlineForMatcher(timeout);
+  const result = await pollAgainstDeadline<Error|undefined>(async () => {
+    if (testInfo && currentTestInfo() !== testInfo)
+      return { continuePolling: false, result: undefined };
+    try {
+      await callback();
+      return { continuePolling: !!this.isNot, result: undefined };
+    } catch (e) {
+      return { continuePolling: !this.isNot, result: e };
     }
-    return { pass: !this.isNot, message: () => '' };
-  });
+  }, deadline, options.intervals || [100, 250, 500, 1000]);
+
+  if (result.timedOut) {
+    const message = result.result ? [
+      result.result.message,
+      '',
+      `Call Log:`,
+      `- ${timeoutMessage}`,
+    ].join('\n') : timeoutMessage;
+    return { message: () => message, pass: !!this.isNot };
+  }
+  return { pass: !this.isNot, message: () => '' };
 }

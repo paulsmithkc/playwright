@@ -18,7 +18,9 @@ import type { WriteStream } from 'tty';
 import type { EnvProducedPayload, ProcessInitParams, TtyParams } from './ipc';
 import { startProfiling, stopProfiling } from 'playwright-core/lib/utils';
 import type { TestInfoError } from '../../types/test';
-import { execArgvWithoutExperimentalLoaderOptions, serializeError } from '../util';
+import { serializeError } from '../util';
+import { registerESMLoader } from './esmLoaderHost';
+import { execArgvWithoutExperimentalLoaderOptions } from '../transform/esmUtils';
 
 export type ProtocolRequest = {
   id: number;
@@ -53,6 +55,10 @@ process.on('SIGTERM', () => {});
 
 // Clear execArgv immediately, so that the user-code does not inherit our loader.
 process.execArgv = execArgvWithoutExperimentalLoaderOptions();
+
+// Node.js >= 20
+if (process.env.PW_TS_ESM_LOADER_ON)
+  registerESMLoader();
 
 let processRunner: ProcessRunner | undefined;
 let processName: string | undefined;
@@ -125,4 +131,26 @@ function setTtyParams(stream: WriteStream, params: TtyParams) {
       count = 16;
     return count <= 2 ** params.colorDepth;
   })as any;
+
+  // Stubs for the rest of the methods to avoid exceptions in user code.
+  stream.clearLine = (dir: any, callback?: () => void) => {
+    callback?.();
+    return true;
+  };
+  stream.clearScreenDown = (callback?: () => void) => {
+    callback?.();
+    return true;
+  };
+  (stream as any).cursorTo = (x: number, y?: number | (() => void), callback?: () => void) => {
+    if (callback)
+      callback();
+    else if (y instanceof Function)
+      y();
+    return true;
+  };
+  stream.moveCursor = (dx: number, dy: number, callback?: () => void) => {
+    callback?.();
+    return true;
+  };
+  stream.getWindowSize = () => [stream.columns, stream.rows];
 }

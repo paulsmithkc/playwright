@@ -159,6 +159,7 @@ export default defineConfig({
   - `wsEndpoint` <[string]> A browser websocket endpoint to connect to.
   - `headers` ?<[void]|[Object]<[string], [string]>> Additional HTTP headers to be sent with web socket connect request. Optional.
   - `timeout` ?<[int]> Timeout in milliseconds for the connection to be established. Optional, defaults to no timeout.
+  - `exposeNetwork` ?<[string]> Option to expose network available on the connecting client to the browser being connected to. See [`method: BrowserType.connect`] for more details.
 
 
 **Usage**
@@ -345,6 +346,10 @@ export default defineConfig({
 - type: <[Object]>
 
 Options used to launch the browser, as passed to [`method: BrowserType.launch`]. Specific options [`property: TestOptions.headless`] and [`property: TestOptions.channel`] take priority over this.
+
+:::warning
+Use custom browser args at your own risk, as some of them may break Playwright functionality.
+:::
 
 **Usage**
 
@@ -541,8 +546,8 @@ export default defineConfig({
 
 ## property: TestOptions.trace
 * since: v1.10
-- type: <[Object]|[TraceMode]<"off"|"on"|"retain-on-failure"|"on-first-retry">>
-  - `mode` <[TraceMode]<"off"|"on"|"retain-on-failure"|"on-first-retry"|"on-all-retries">> Trace recording mode.
+- type: <[Object]|[TraceMode]<"off"|"on"|"retain-on-failure"|"on-first-retry"|"retain-on-first-failure">>
+  - `mode` <[TraceMode]<"off"|"on"|"retain-on-failure"|"on-first-retry"|"on-all-retries"|"retain-on-first-failure">> Trace recording mode.
   - `attachments` ?<[boolean]> Whether to include test attachments. Defaults to true. Optional.
   - `screenshots` ?<[boolean]> Whether to capture screenshots during tracing. Screenshots are used to build a timeline preview. Defaults to true. Optional.
   - `snapshots` ?<[boolean]> Whether to capture DOM snapshot on every action. Defaults to true. Optional.
@@ -554,6 +559,7 @@ Whether to record trace for each test. Defaults to `'off'`.
 * `'retain-on-failure'`: Record trace for each test, but remove all traces from successful test runs.
 * `'on-first-retry'`: Record trace only when retrying a test for the first time.
 * `'on-all-retries'`: Record traces only when retrying for all retries.
+* `'retain-on-first-failure'`: Record traces only when the test fails for the first time.
 
 For more control, pass an object that specifies `mode` and trace features to enable.
 

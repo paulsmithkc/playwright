@@ -152,32 +152,44 @@ for (const useIntermediateMergeReport of [false, true] as const) {
       await expect(page.locator('text=Image mismatch')).toBeVisible();
       await expect(page.locator('text=Snapshot mismatch')).toHaveCount(0);
 
-      const set = new Set();
+      await expect(page.getByTestId('test-result-image-mismatch-tabs').locator('div')).toHaveText([
+        'Diff',
+        'Actual',
+        'Expected',
+        'Side by side',
+        'Slider',
+      ]);
 
-      const imageDiff = page.locator('data-testid=test-result-image-mismatch');
-      await imageDiff.locator('text="Actual"').click();
-      const expectedImage = imageDiff.locator('img').first();
-      const actualImage = imageDiff.locator('img').last();
-      await expect(expectedImage).toHaveAttribute('src', /.*png/);
-      await expect(actualImage).toHaveAttribute('src', /.*png/);
-      set.add(await expectedImage.getAttribute('src'));
-      set.add(await actualImage.getAttribute('src'));
-      expect(set.size, 'Should be two images overlaid').toBe(2);
-      await expect(imageDiff).toContainText('200x200');
+      const imageDiff = page.getByTestId('test-result-image-mismatch');
+      await test.step('Diff', async () => {
+        await expect(imageDiff.locator('img')).toHaveAttribute('alt', 'Diff');
+      });
 
-      const sliderElement = imageDiff.locator('data-testid=test-result-image-mismatch-grip');
-      await expect.poll(() => sliderElement.evaluate(e => e.style.left), 'Actual slider is on the right').toBe('590px');
+      await test.step('Actual', async () => {
+        await imageDiff.getByText('Actual', { exact: true }).click();
+        await expect(imageDiff.locator('img')).toHaveAttribute('alt', 'Actual');
+      });
 
-      await imageDiff.locator('text="Expected"').click();
-      set.add(await expectedImage.getAttribute('src'));
-      set.add(await actualImage.getAttribute('src'));
-      expect(set.size).toBe(2);
+      await test.step('Expected', async () => {
+        await imageDiff.getByText('Expected', { exact: true }).click();
+        await expect(imageDiff.locator('img')).toHaveAttribute('alt', 'Expected');
+      });
 
-      await expect.poll(() => sliderElement.evaluate(e => e.style.left), 'Expected slider is on the left').toBe('350px');
+      await test.step('Side by side', async () => {
+        await imageDiff.getByText('Side by side').click();
+        await expect(imageDiff.locator('img')).toHaveCount(2);
+        await expect(imageDiff.locator('img').first()).toHaveAttribute('alt', 'Expected');
+        await expect(imageDiff.locator('img').last()).toHaveAttribute('alt', 'Actual');
+        await imageDiff.locator('img').last().click();
+        await expect(imageDiff.locator('img').last()).toHaveAttribute('alt', 'Diff');
+      });
 
-      await imageDiff.locator('text="Diff"').click();
-      set.add(await imageDiff.locator('img').getAttribute('src'));
-      expect(set.size, 'Should be three images altogether').toBe(3);
+      await test.step('Slider', async () => {
+        await imageDiff.getByText('Slider', { exact: true }).click();
+        await expect(imageDiff.locator('img')).toHaveCount(2);
+        await expect(imageDiff.locator('img').first()).toHaveAttribute('alt', 'Expected');
+        await expect(imageDiff.locator('img').last()).toHaveAttribute('alt', 'Actual');
+      });
     });
 
     test('should include multiple image diffs', async ({ runInlineTest, page, showReport }) => {
@@ -249,8 +261,8 @@ for (const useIntermediateMergeReport of [false, true] as const) {
       await expect(page.locator('data-testid=test-result-image-mismatch')).toHaveCount(3);
       await expect(page.locator('text=Image mismatch:')).toHaveText([
         'Image mismatch: expected.png',
-        'Image mismatch: expected.png-1',
-        'Image mismatch: expected.png-2',
+        'Image mismatch: expected-1.png',
+        'Image mismatch: expected-2.png',
       ]);
     });
 
@@ -280,18 +292,13 @@ for (const useIntermediateMergeReport of [false, true] as const) {
       await expect(page.locator('text=Image mismatch')).toHaveCount(1);
       await expect(page.locator('text=Snapshot mismatch')).toHaveCount(0);
       await expect(page.locator('.chip-header', { hasText: 'Screenshots' })).toHaveCount(0);
-      const imageDiff = page.locator('data-testid=test-result-image-mismatch');
-      await imageDiff.locator('text="Actual"').click();
-      const image = imageDiff.locator('img');
-      await expect(image.first()).toHaveAttribute('src', /.*png/);
-      await expect(image.last()).toHaveAttribute('src', /.*png/);
-      const previousSrc = await image.first().getAttribute('src');
-      const actualSrc = await image.last().getAttribute('src');
-      await imageDiff.locator('text="Previous"').click();
-      await imageDiff.locator('text="Diff"').click();
-      const diffSrc = await image.getAttribute('src');
-      const set = new Set([previousSrc, actualSrc, diffSrc]);
-      expect(set.size).toBe(3);
+      await expect(page.getByTestId('test-result-image-mismatch-tabs').locator('div')).toHaveText([
+        'Diff',
+        'Actual',
+        'Expected',
+        'Side by side',
+        'Slider',
+      ]);
     });
 
     test('should not include image diff with non-images', async ({ runInlineTest, page, showReport }) => {
@@ -435,8 +442,11 @@ for (const useIntermediateMergeReport of [false, true] as const) {
         `,
         'a.test.js': `
           import { test, expect } from '@playwright/test';
+          async function evaluateWrapper(page, expression) {
+            await page.evaluate(expression);
+          }
           test('passes', async ({ page }) => {
-            await page.evaluate('2 + 2');
+            await evaluateWrapper(page, '2 + 2');
           });
         `,
       }, { reporter: 'dot,html' }, { PW_TEST_HTML_REPORT_OPEN: 'never' });
@@ -459,6 +469,36 @@ for (const useIntermediateMergeReport of [false, true] as const) {
         /a.test.js:[\d]+/,
       ]);
       await expect(page.getByTestId('stack-trace-list').locator('.list-view-entry.selected')).toContainText('a.test.js');
+    });
+
+    test('should not show stack trace', async ({ runInlineTest, page, showReport }) => {
+      const result = await runInlineTest({
+        'playwright.config.js': `
+          module.exports = { use: { trace: 'on' } };
+        `,
+        'a.test.js': `
+          import { test, expect } from '@playwright/test';
+          test('passes', async ({ page }) => {
+            await page.evaluate('2 + 2');
+          });
+        `,
+      }, { reporter: 'dot,html' }, { PW_TEST_HTML_REPORT_OPEN: 'never' });
+      expect(result.exitCode).toBe(0);
+      expect(result.passed).toBe(1);
+
+      await showReport();
+      await page.click('text=passes');
+      await page.click('img');
+      await page.click('.action-title >> text=page.evaluate');
+      await page.click('text=Source');
+
+      await expect(page.locator('.CodeMirror-line')).toContainText([
+        /import.*test/,
+        /page\.evaluate/
+      ]);
+      await expect(page.locator('.source-line-running')).toContainText('page.evaluate');
+
+      await expect(page.getByTestId('stack-trace-list')).toHaveCount(0);
     });
 
     test('should show trace title', async ({ runInlineTest, page, showReport }) => {
@@ -876,7 +916,8 @@ for (const useIntermediateMergeReport of [false, true] as const) {
           'playwright.config.ts': `
             import { gitCommitInfo } from 'playwright/lib/plugins';
             import { test, expect } from '@playwright/test';
-            export default { _plugins: [gitCommitInfo()] };
+            const plugins = [gitCommitInfo()];
+            export default { '@playwright/test': { plugins } };
           `,
           'example.spec.ts': `
             import { test, expect } from '@playwright/test';
@@ -938,7 +979,7 @@ for (const useIntermediateMergeReport of [false, true] as const) {
                 'revision.email': 'shakespeare@example.local',
               },
             });
-            export default { _plugins: [plugin] };
+            export default { '@playwright/test': { plugins: [plugin] } };
           `,
           'example.spec.ts': `
             import { gitCommitInfo } from 'playwright/lib/plugins';
@@ -1119,7 +1160,7 @@ for (const useIntermediateMergeReport of [false, true] as const) {
           `,
           'c.test.js': `
             const { expect, test } = require('@playwright/test');
-            test('@regression @failed failed', async ({}) => {
+            test('@regression @failed failed', { tag: '@foo' }, async ({}) => {
               expect(1).toBe(2);
             });
             test('@regression @flaky flaky', async ({}, testInfo) => {
@@ -1128,7 +1169,7 @@ for (const useIntermediateMergeReport of [false, true] as const) {
               else
                 expect(1).toBe(2);
             });
-            test.skip('@regression skipped', async ({}) => {
+            test.skip('@regression skipped', { tag: ['@foo', '@bar'] }, async ({}) => {
               expect(1).toBe(2);
             });
           `,
@@ -1140,58 +1181,66 @@ for (const useIntermediateMergeReport of [false, true] as const) {
 
         await showReport();
 
-        await expect(page.locator('.test-file-test .label')).toHaveCount(42);
         await expect(page.locator('.test-file-test', { has: page.getByText('@regression @failed failed', { exact: true }) }).locator('.label')).toHaveText([
           'chromium',
-          'failed',
           'regression',
+          'failed',
+          'foo',
           'firefox',
-          'failed',
           'regression',
-          'webkit',
           'failed',
-          'regression'
+          'foo',
+          'webkit',
+          'regression',
+          'failed',
+          'foo',
         ]);
         await expect(page.locator('.test-file-test', { has: page.getByText('@regression @flaky flaky', { exact: true }) }).locator('.label')).toHaveText([
           'chromium',
-          'flaky',
           'regression',
+          'flaky',
           'firefox',
-          'flaky',
           'regression',
+          'flaky',
           'webkit',
-          'flaky',
           'regression',
+          'flaky',
         ]);
         await expect(page.locator('.test-file-test', { has: page.getByText('@regression skipped', { exact: true }) }).locator('.label')).toHaveText([
           'chromium',
           'regression',
+          'foo',
+          'bar',
           'firefox',
           'regression',
+          'foo',
+          'bar',
           'webkit',
           'regression',
+          'foo',
+          'bar',
         ]);
         await expect(page.locator('.test-file-test', { has: page.getByText('@smoke @passed passed', { exact: true }) }).locator('.label')).toHaveText([
           'chromium',
-          'passed',
           'smoke',
+          'passed',
           'firefox',
-          'passed',
           'smoke',
-          'webkit',
           'passed',
-          'smoke'
+          'webkit',
+          'smoke',
+          'passed',
         ]);
         await expect(page.locator('.test-file-test', { has: page.getByText('@smoke @failed failed', { exact: true }) }).locator('.label')).toHaveText([
           'chromium',
-          'failed',
           'smoke',
+          'failed',
           'firefox',
-          'failed',
           'smoke',
+          'failed',
           'webkit',
-          'failed',
           'smoke',
+          'failed',
         ]);
       });
 
@@ -1945,7 +1994,7 @@ for (const useIntermediateMergeReport of [false, true] as const) {
         await expect(page).toHaveURL(/testId/);
         await expect(page.locator('.test-case-path')).toHaveText('Root describe › @Notifications');
         await expect(page.locator('.test-case-title')).toHaveText('Test failed -- @call @call-details @e2e @regression #VQ458');
-        await expect(page.locator('.label')).toHaveText(['chromium', 'call', 'call-details', 'e2e', 'Notifications', 'regression']);
+        await expect(page.locator('.label')).toHaveText(['chromium', 'Notifications', 'call', 'call-details', 'e2e', 'regression']);
 
         await page.goBack();
         await expect(page).not.toHaveURL(/testId/);
@@ -1957,7 +2006,7 @@ for (const useIntermediateMergeReport of [false, true] as const) {
         await expect(page).toHaveURL(/testId/);
         await expect(page.locator('.test-case-path')).toHaveText('Root describe › @Monitoring');
         await expect(page.locator('.test-case-title')).toHaveText('Test passed -- @call @call-details @e2e @regression #VQ457');
-        await expect(page.locator('.label')).toHaveText(['firefox', 'call', 'call-details', 'e2e', 'Monitoring', 'regression']);
+        await expect(page.locator('.label')).toHaveText(['firefox', 'Monitoring', 'call', 'call-details', 'e2e', 'regression']);
       });
     });
 
@@ -2003,9 +2052,9 @@ for (const useIntermediateMergeReport of [false, true] as const) {
 
       // Failing test first, then sorted by the run order.
       await expect(page.locator('.test-file-test')).toHaveText([
-        /main › fails\d+m?smain.spec.ts:9/,
-        /main › first › passes\d+m?sfirst.ts:12/,
-        /main › second › passes\d+m?ssecond.ts:5/,
+        /main › fails\d+m?s?main.spec.ts:9/,
+        /main › first › passes\d+m?s?first.ts:12/,
+        /main › second › passes\d+m?s?second.ts:5/,
       ]);
     });
 

@@ -90,8 +90,9 @@ export class BrowserContextDispatcher extends Dispatcher<BrowserContext, channel
       this._dispatchEvent('pageError', { error: serializeError(error), page: PageDispatcher.from(this, page) });
     });
     this.addObjectListener(BrowserContext.Events.Console, (message: ConsoleMessage) => {
-      if (this._shouldDispatchEvent(message.page(), 'console')) {
-        const pageDispatcher = PageDispatcher.from(this, message.page());
+      const page = message.page()!;
+      if (this._shouldDispatchEvent(page, 'console')) {
+        const pageDispatcher = PageDispatcher.from(this, page);
         this._dispatchEvent('console', {
           page: pageDispatcher,
           type: message.type(),
@@ -221,6 +222,10 @@ export class BrowserContextDispatcher extends Dispatcher<BrowserContext, channel
 
   async clearCookies(): Promise<void> {
     await this._context.clearCookies();
+  }
+
+  async removeCookies(params: channels.BrowserContextRemoveCookiesParams): Promise<void> {
+    await this._context.removeCookies(params.filter);
   }
 
   async grantPermissions(params: channels.BrowserContextGrantPermissionsParams): Promise<void> {

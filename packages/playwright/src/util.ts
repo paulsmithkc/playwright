@@ -15,12 +15,11 @@
  */
 
 import fs from 'fs';
-import { mime } from 'playwright-core/lib/utilsBundle';
 import type { StackFrame } from '@protocol/channels';
 import util from 'util';
 import path from 'path';
 import url from 'url';
-import { debug, minimatch, parseStackTraceLine } from 'playwright-core/lib/utilsBundle';
+import { debug, mime, minimatch, parseStackTraceLine } from 'playwright-core/lib/utilsBundle';
 import { formatCallLog } from 'playwright-core/lib/utils';
 import type { TestInfoError } from './../types/test';
 import type { Location } from './../types/testReporter';
@@ -31,13 +30,14 @@ const PLAYWRIGHT_TEST_PATH = path.join(__dirname, '..');
 const PLAYWRIGHT_CORE_PATH = path.dirname(require.resolve('playwright-core/package.json'));
 
 export function filterStackTrace(e: Error): { message: string, stack: string } {
+  const name = e.name ? e.name + ': ' : '';
   if (process.env.PWDEBUGIMPL)
-    return { message: e.name + ': ' + e.message, stack: e.stack || '' };
+    return { message: name + e.message, stack: e.stack || '' };
 
   const stackLines = stringifyStackFrames(filteredStackTrace(e.stack?.split('\n') || []));
   return {
-    message: e.name + ': ' + e.message,
-    stack: `${e.name}: ${e.message}\n${stackLines.join('\n')}`
+    message: name + e.message,
+    stack: `${name}${e.message}${stackLines.map(line => '\n' + line).join('')}`
   };
 }
 
@@ -185,6 +185,8 @@ export function expectTypes(receiver: any, types: string[], matcherName: string)
   }
 }
 
+export const windowsFilesystemFriendlyLength = 60;
+
 export function trimLongString(s: string, length = 100) {
   if (s.length <= length)
     return s;
@@ -195,12 +197,16 @@ export function trimLongString(s: string, length = 100) {
   return s.substring(0, start) + middle + s.slice(-end);
 }
 
-export function addSuffixToFilePath(filePath: string, suffix: string, customExtension?: string, sanitize = false): string {
-  const dirname = path.dirname(filePath);
+export function addSuffixToFilePath(filePath: string, suffix: string): string {
   const ext = path.extname(filePath);
-  const name = path.basename(filePath, ext);
-  const base = path.join(dirname, name);
-  return (sanitize ? sanitizeForFilePath(base) : base) + suffix + (customExtension || ext);
+  const base = filePath.substring(0, filePath.length - ext.length);
+  return base + suffix + ext;
+}
+
+export function sanitizeFilePathBeforeExtension(filePath: string): string {
+  const ext = path.extname(filePath);
+  const base = filePath.substring(0, filePath.length - ext.length);
+  return sanitizeForFilePath(base) + ext;
 }
 
 /**
@@ -208,7 +214,8 @@ export function addSuffixToFilePath(filePath: string, suffix: string, customExte
  */
 export function getContainedPath(parentPath: string, subPath: string = ''): string | null {
   const resolvedPath = path.resolve(parentPath, subPath);
-  if (resolvedPath === parentPath || resolvedPath.startsWith(parentPath + path.sep)) return resolvedPath;
+  if (resolvedPath === parentPath || resolvedPath.startsWith(parentPath + path.sep))
+    return resolvedPath;
   return null;
 }
 
@@ -284,22 +291,6 @@ function folderIsModule(folder: string): boolean {
     return false;
   // Rely on `require` internal caching logic.
   return require(packageJsonPath).type === 'module';
-}
-
-const kExperimentalLoaderOptions = [
-  '--no-warnings',
-  `--experimental-loader=${url.pathToFileURL(require.resolve('playwright/lib/transform/esmLoader')).toString()}`,
-];
-
-export function execArgvWithExperimentalLoaderOptions() {
-  return [
-    ...process.execArgv,
-    ...kExperimentalLoaderOptions,
-  ];
-}
-
-export function execArgvWithoutExperimentalLoaderOptions() {
-  return process.execArgv.filter(arg => !kExperimentalLoaderOptions.includes(arg));
 }
 
 // This follows the --moduleResolution=bundler strategy from tsc.

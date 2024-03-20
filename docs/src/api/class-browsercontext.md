@@ -106,7 +106,7 @@ The reason to be reported to the operations interrupted by the context closure.
   - alias-java: consoleMessage
 - argument: <[ConsoleMessage]>
 
-Emitted when JavaScript within the page calls one of console API methods, e.g. `console.log` or `console.dir`. Also emitted if the page throws an error or a warning.
+Emitted when JavaScript within the page calls one of console API methods, e.g. `console.log` or `console.dir`.
 
 The arguments passed into `console.log` and the page are available on the [ConsoleMessage] event handler argument.
 
@@ -186,7 +186,10 @@ context.on("dialog", lambda dialog: dialog.accept())
 ```
 
 ```csharp
-context.Dialog += (_, dialog) => dialog.AcceptAsync();
+Context.Dialog += async (_, dialog) =>
+{
+    await dialog.AcceptAsync();
+};
 ```
 
 :::note
@@ -390,7 +393,7 @@ browser_context.add_init_script(path="preload.js")
 ```
 
 ```csharp
-await context.AddInitScriptAsync(scriptPath: "preload.js");
+await Context.AddInitScriptAsync(scriptPath: "preload.js");
 ```
 
 :::note
@@ -1010,6 +1013,27 @@ Creates a new page in the browser context.
 
 Returns all open pages in the context.
 
+## async method: BrowserContext.removeCookies
+* since: v1.43
+
+Removes cookies from context. At least one of the removal criteria should be provided.
+
+**Usage**
+
+```js
+await browserContext.removeCookies({ name: 'session-id' });
+await browserContext.removeCookies({ domain: 'my-origin.com' });
+await browserContext.removeCookies({ path: '/api/v1' });
+await browserContext.removeCookies({ name: 'session-id', domain: 'my-origin.com' });
+```
+
+### param: BrowserContext.removeCookies.filter
+* since: v1.43
+- `filter` <[Object]>
+  - `name` ?<[string]>
+  - `domain` ?<[string]>
+  - `path` ?<[string]>
+
 ## property: BrowserContext.request
 * since: v1.16
 * langs:
@@ -1120,11 +1144,11 @@ await browser.CloseAsync();
 It is possible to examine the request to decide the route action. For example, mocking all requests that contain some post data, and leaving all other requests as is:
 
 ```js
-await context.route('/api/**', route => {
+await context.route('/api/**', async route => {
   if (route.request().postData().includes('my-string'))
-    route.fulfill({ body: 'mocked-data' });
+    await route.fulfill({ body: 'mocked-data' });
   else
-    route.continue();
+    await route.continue();
 });
 ```
 
@@ -1138,16 +1162,16 @@ context.route("/api/**", route -> {
 ```
 
 ```python async
-def handle_route(route):
+async def handle_route(route: Route):
   if ("my-string" in route.request.post_data):
-    route.fulfill(body="mocked-data")
+    await route.fulfill(body="mocked-data")
   else:
-    route.continue_()
+    await route.continue_()
 await context.route("/api/**", handle_route)
 ```
 
 ```python sync
-def handle_route(route):
+def handle_route(route: Route):
   if ("my-string" in route.request.post_data):
     route.fulfill(body="mocked-data")
   else:
@@ -1159,7 +1183,7 @@ context.route("/api/**", handle_route)
 await page.RouteAsync("/api/**", async r =>
 {
     if (r.Request.PostData.Contains("my-string"))
-        await r.FulfillAsync(body: "mocked-data");
+        await r.FulfillAsync(new() { Body = "mocked-data" });
     else
         await r.ContinueAsync();
 });
@@ -1407,6 +1431,14 @@ Returns storage state for this browser context, contains current cookies and loc
 ## property: BrowserContext.tracing
 * since: v1.12
 - type: <[Tracing]>
+
+## async method: BrowserContext.unrouteAll
+* since: v1.41
+
+Removes all routes created with [`method: BrowserContext.route`] and [`method: BrowserContext.routeFromHAR`].
+
+### option: BrowserContext.unrouteAll.behavior = %%-unroute-all-options-behavior-%%
+* since: v1.41
 
 ## async method: BrowserContext.unroute
 * since: v1.8

@@ -14,7 +14,6 @@
   limitations under the License.
 */
 
-import { escapeRegExp } from './labelUtils';
 import type { TestCaseSummary } from './types';
 
 export class Filter {
@@ -108,12 +107,13 @@ export class Filter {
       if (test.outcome === 'skipped')
         status = 'skipped';
       const searchValues: SearchValues = {
-        text: (status + ' ' + test.projectName + ' ' + (test.reportName || '') + ' ' + test.location.file + ' ' + test.path.join(' ') + ' ' + test.title).toLowerCase(),
+        text: (status + ' ' + test.projectName + ' ' + test.tags.join(' ') + ' ' + test.location.file + ' ' + test.path.join(' ') + ' ' + test.title).toLowerCase(),
         project: test.projectName.toLowerCase(),
         status: status as any,
         file: test.location.file,
         line: String(test.location.line),
         column: String(test.location.column),
+        labels: test.tags.map(tag => tag.toLowerCase()),
       };
       (test as any).searchValues = searchValues;
     }
@@ -140,7 +140,7 @@ export class Filter {
       }
     }
     if (this.labels.length) {
-      const matches = this.labels.every(l => searchValues.text?.match(new RegExp(`(\\s|^)${escapeRegExp(l)}(\\s|$)`, 'g')));
+      const matches = this.labels.every(l => searchValues.labels.includes(l));
       if (!matches)
         return false;
     }
@@ -156,5 +156,6 @@ type SearchValues = {
   file: string;
   line: string;
   column: string;
+  labels: string[];
 };
 

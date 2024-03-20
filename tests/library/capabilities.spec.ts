@@ -108,7 +108,8 @@ it('should play audio @smoke', async ({ page, server, browserName, platform }) =
   expect(await page.$eval('audio', e => e.currentTime)).toBeGreaterThan(0.2);
 });
 
-it('should support webgl @smoke', async ({ page, browserName, headless, browserMajorVersion, channel }) => {
+it('should support webgl @smoke', async ({ page, browserName, platform }) => {
+  it.fixme(browserName === 'chromium' && platform === 'darwin' && os.arch() === 'arm64', 'SwiftShader is not available on macOS-arm64 - https://github.com/microsoft/playwright/issues/28216');
   const hasWebGL = await page.evaluate(() => {
     const canvas = document.createElement('canvas');
     return !!canvas.getContext('webgl');
@@ -116,10 +117,11 @@ it('should support webgl @smoke', async ({ page, browserName, headless, browserM
   expect(hasWebGL).toBe(true);
 });
 
-it('should support webgl 2 @smoke', async ({ page, browserName, headless, isWindows, channel, browserMajorVersion }) => {
+it('should support webgl 2 @smoke', async ({ page, browserName, headless, isWindows, platform }) => {
   it.skip(browserName === 'webkit', 'WebKit doesn\'t have webgl2 enabled yet upstream.');
   it.fixme(browserName === 'firefox' && isWindows);
   it.fixme(browserName === 'chromium' && !headless, 'chromium doesn\'t like webgl2 when running under xvfb');
+  it.fixme(browserName === 'chromium' && platform === 'darwin' && os.arch() === 'arm64', 'SwiftShader is not available on macOS-arm64 - https://github.com/microsoft/playwright/issues/28216');
 
   const hasWebGL2 = await page.evaluate(() => {
     const canvas = document.createElement('canvas');
@@ -210,10 +212,13 @@ it('serviceWorker should intercept document request', async ({ page, server }) =
 
 it('webkit should define window.safari', async ({ page, server, browserName }) => {
   it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/21037' });
+  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/29032' });
   it.skip(browserName !== 'webkit');
   await page.goto(server.EMPTY_PAGE);
   const defined = await page.evaluate(() => !!(window as any).safari);
   expect(defined).toBeTruthy();
+  expect(await page.evaluate(() => typeof (window as any).safari.pushNotification)).toBe('object');
+  expect(await page.evaluate(() => (window as any).safari.pushNotification.toString())).toBe('[object SafariRemoteNotification]');
 });
 
 it('make sure that XMLHttpRequest upload events are emitted correctly', async ({ page, server }) => {

@@ -18,7 +18,7 @@ import type { APIRequestContext, Browser, BrowserContext, BrowserContextOptions,
 export * from 'playwright-core';
 
 export type ReporterDescription =
-  ['blob'] | ['blob', { outputDir?: string }] |
+  ['blob'] | ['blob', { outputDir?: string, fileName?: string }] |
   ['dot'] |
   ['line'] |
   ['list'] | ['list', { printSteps?: boolean }] |
@@ -111,13 +111,25 @@ export interface TestInfo {
   project: FullProject;
 }
 
+type TestDetailsAnnotation = {
+  type: string;
+  description?: string;
+};
+
+export type TestDetails = {
+  tag?: string | string[];
+  annotation?: TestDetailsAnnotation | TestDetailsAnnotation[];
+}
+
 interface SuiteFunction {
   (title: string, callback: () => void): void;
   (callback: () => void): void;
+  (title: string, details: TestDetails, callback: () => void): void;
 }
 
 interface TestFunction<TestArgs> {
-  (title: string, testFunction: (args: TestArgs, testInfo: TestInfo) => Promise<void> | void): void;
+  (title: string, body: (args: TestArgs, testInfo: TestInfo) => Promise<void> | void): void;
+  (title: string, details: TestDetails, body: (args: TestArgs, testInfo: TestInfo) => Promise<void> | void): void;
 }
 
 export interface TestType<TestArgs extends KeyValue, WorkerArgs extends KeyValue> extends TestFunction<TestArgs & WorkerArgs> {
@@ -134,17 +146,21 @@ export interface TestType<TestArgs extends KeyValue, WorkerArgs extends KeyValue
     };
     configure: (options: { mode?: 'default' | 'parallel' | 'serial', retries?: number, timeout?: number }) => void;
   };
-  skip(title: string, testFunction: (args: TestArgs & WorkerArgs, testInfo: TestInfo) => Promise<void> | void): void;
+  skip(title: string, body: (args: TestArgs & WorkerArgs, testInfo: TestInfo) => Promise<void> | void): void;
+  skip(title: string, details: TestDetails, body: (args: TestArgs & WorkerArgs, testInfo: TestInfo) => Promise<void> | void): void;
   skip(): void;
   skip(condition: boolean, description?: string): void;
   skip(callback: (args: TestArgs & WorkerArgs) => boolean, description?: string): void;
-  fixme(title: string, testFunction: (args: TestArgs & WorkerArgs, testInfo: TestInfo) => Promise<void> | void): void;
+  fixme(title: string, body: (args: TestArgs & WorkerArgs, testInfo: TestInfo) => Promise<void> | void): void;
+  fixme(title: string, details: TestDetails, body: (args: TestArgs & WorkerArgs, testInfo: TestInfo) => Promise<void> | void): void;
   fixme(): void;
   fixme(condition: boolean, description?: string): void;
   fixme(callback: (args: TestArgs & WorkerArgs) => boolean, description?: string): void;
-  fail(): void;
+  fail(title: string, body: (args: TestArgs & WorkerArgs, testInfo: TestInfo) => Promise<void> | void): void;
+  fail(title: string, details: TestDetails, body: (args: TestArgs & WorkerArgs, testInfo: TestInfo) => Promise<void> | void): void;
   fail(condition: boolean, description?: string): void;
   fail(callback: (args: TestArgs & WorkerArgs) => boolean, description?: string): void;
+  fail(): void;
   slow(): void;
   slow(condition: boolean, description?: string): void;
   slow(callback: (args: TestArgs & WorkerArgs) => boolean, description?: string): void;
@@ -232,7 +248,7 @@ export interface PlaywrightWorkerOptions {
 }
 
 export type ScreenshotMode = 'off' | 'on' | 'only-on-failure';
-export type TraceMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry' | 'on-all-retries';
+export type TraceMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry' | 'on-all-retries' | 'retain-on-first-failure';
 export type VideoMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry';
 
 export interface PlaywrightTestOptions {
@@ -325,7 +341,24 @@ interface GenericAssertions<R> {
 
 type FunctionAssertions = {
   /**
-   * Retries the callback until it passes.
+   * Retries the callback until all assertions within it pass or the `timeout` value is reached.
+   * The `intervals` parameter can be used to establish the probing frequency or pattern.
+   *
+   * **Usage**
+   * ```js
+   * await expect(async () => {
+   *   const response = await page.request.get('https://api.example.com');
+   *   expect(response.status()).toBe(200);
+   * }).toPass({
+   *   // Probe, wait 1s, probe, wait 2s, probe, wait 10s, probe, wait 10s, probe
+   *   intervals: [1_000, 2_000, 10_000], // Defaults to [100, 250, 500, 1000].
+   *   timeout: 60_000 // Defaults to 0
+   * });
+   * ```
+   *
+   * Note that by default `toPass` does not respect custom expect timeout.
+   *
+   * @param options
    */
   toPass(options?: { timeout?: number, intervals?: number[] }): Promise<void>;
 };
@@ -468,4 +501,5 @@ type MergedExpect<List> = Expect<MergedExpectMatchers<List>>;
 export function mergeExpects<List extends any[]>(...expects: List): MergedExpect<List>;
 
 // This is required to not export everything by default. See https://github.com/Microsoft/TypeScript/issues/19545#issuecomment-340490459
-export {};
+export { };
+

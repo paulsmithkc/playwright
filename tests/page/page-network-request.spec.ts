@@ -17,6 +17,7 @@
 
 import { test as it, expect } from './pageTest';
 import { attachFrame } from '../config/utils';
+import fs from 'fs';
 
 it('should work for main frame navigation request', async ({ page, server }) => {
   const requests = [];
@@ -289,6 +290,20 @@ it('should parse the data if content-type is application/x-www-form-urlencoded',
   expect(request.postDataJSON()).toEqual({ 'foo': 'bar', 'baz': '123' });
 });
 
+it('should parse the data if content-type is application/x-www-form-urlencoded; charset=UTF-8', async ({ page, server }) => {
+  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/29872' });
+  await page.goto(server.EMPTY_PAGE);
+  const requestPromise = page.waitForRequest('**/post');
+  await page.evaluate(() => fetch('./post', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    },
+    body: 'foo=bar&baz=123'
+  }));
+  expect((await requestPromise).postDataJSON()).toEqual({ 'foo': 'bar', 'baz': '123' });
+});
+
 it('should get |undefined| with postDataJSON() when there is no post data', async ({ page, server }) => {
   const response = await page.goto(server.EMPTY_PAGE);
   expect(response.request().postDataJSON()).toBe(null);
@@ -447,4 +462,76 @@ it('should not allow to access frame on popup main request', async ({ page, serv
   await response.finished();
   await popupPromise;
   await clicked;
+});
+
+it('page.reload return 304 status code', async ({ page, server, browserName }) => {
+  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/28779' });
+  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/29441' });
+  it.fixme(browserName === 'firefox', 'Does not send second request');
+  let requestNumber = 0;
+  server.setRoute('/test.html', (req, res) => {
+    ++requestNumber;
+    const headers = {
+      'cf-cache-status': 'DYNAMIC',
+      'Content-Type': 'text/html;charset=UTF-8',
+      'Last-Modified': 'Fri, 05 Jan 2024 01:56:20 GMT',
+      'Vary': 'Access-Control-Request-Headers',
+    };
+    if (requestNumber === 1)
+      res.writeHead(200, headers);
+    else
+      res.writeHead(304, 'Not Modified', headers);
+    res.write(`<div>Test</div>`);
+    res.end();
+  });
+  const response1 = await page.goto(server.PREFIX + '/test.html');
+  expect(response1.status()).toBe(200);
+  const response2 = await page.reload();
+  expect(requestNumber).toBe(2);
+  if (browserName === 'chromium') {
+    expect(response2.status()).toBe(200);
+    expect(response2.statusText()).toBe('OK');
+    expect(await response2.text()).toBe('<div>Test</div>');
+  } else {
+    expect(response2.status()).toBe(304);
+    expect(response2.statusText()).toBe('Not Modified');
+  }
+});
+
+it('should handle mixed-content blocked requests', async ({ page, asset, browserName }) => {
+  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/29833' });
+  it.skip(browserName !== 'chromium', 'FF and WK actually succeed with the request, and block afterwards');
+
+  await page.route('**/mixedcontent.html', route => {
+    void route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: `
+        <!doctype html>
+        <meta charset="utf-8">
+        <style>
+        @font-face {
+          font-family: 'pwtest-iconfont';
+          src: url('http://another.com/iconfont.woff2') format('woff2');
+        }
+        body {
+          font-family: 'pwtest-iconfont';
+        }
+        </style>
+        <span>+-</span>
+    `,
+    });
+  });
+  await page.route('**/iconfont.woff2', async route => {
+    const body = await fs.promises.readFile(asset('webfont/iconfont2.woff'));
+    await route.fulfill({ body });
+  });
+
+  const [request] = await Promise.all([
+    page.waitForEvent('requestfailed', r => r.url().includes('iconfont.woff2')),
+    page.goto('https://example.com/mixedcontent.html'),
+  ]);
+  const headers = await request.allHeaders();
+  expect(headers['origin']).toBeTruthy();
+  expect(request.failure().errorText).toBe('mixed-content');
 });

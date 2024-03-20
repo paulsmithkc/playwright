@@ -433,7 +433,8 @@ class ContextRecorder extends EventEmitter {
 
   setOutput(codegenId: string, outputFile?: string) {
     const languages = new Set([
-      new JavaLanguageGenerator(),
+      new JavaLanguageGenerator('junit'),
+      new JavaLanguageGenerator('library'),
       new JavaScriptLanguageGenerator(/* isPlaywrightTest */false),
       new JavaScriptLanguageGenerator(/* isPlaywrightTest */true),
       new PythonLanguageGenerator(/* isAsync */false, /* isPytest */true),
@@ -625,13 +626,8 @@ class ContextRecorder extends EventEmitter {
       callMetadata.endTime = monotonicTime();
       await frame.instrumentation.onAfterCall(frame, callMetadata);
 
-      const timer = setTimeout(() => {
-        // Commit the action after 5 seconds so that no further signals are added to it.
-        actionInContext.committed = true;
-        this._timers.delete(timer);
-      }, 5000);
+      this._setCommittedAfterTimeout(actionInContext);
       this._generator.didPerformAction(actionInContext);
-      this._timers.add(timer);
     };
 
     const kActionTimeout = 5000;
@@ -663,7 +659,17 @@ class ContextRecorder extends EventEmitter {
       frame: frameDescription,
       action
     };
+    this._setCommittedAfterTimeout(actionInContext);
     this._generator.addAction(actionInContext);
+  }
+
+  private _setCommittedAfterTimeout(actionInContext: ActionInContext) {
+    const timer = setTimeout(() => {
+      // Commit the action after 5 seconds so that no further signals are added to it.
+      actionInContext.committed = true;
+      this._timers.delete(timer);
+    }, isUnderTest() ? 500 : 5000);
+    this._timers.add(timer);
   }
 
   private _onFrameNavigated(frame: Frame, page: Page) {
@@ -739,7 +745,7 @@ async function findFrameSelector(frame: Frame): Promise<string | undefined> {
     const utility = await parent._utilityContext();
     const injected = await utility.injectedScript();
     const selector = await injected.evaluate((injected, element) => {
-      return injected.generateSelector(element as Element, { testIdAttributeName: '', omitInternalEngines: true });
+      return injected.generateSelectorSimple(element as Element, { testIdAttributeName: '', omitInternalEngines: true });
     }, frameElement);
     return selector;
   } catch (e) {

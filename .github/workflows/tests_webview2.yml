@@ -25,19 +25,25 @@ jobs:
     name: WebView2
     runs-on: windows-2022
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-node@v3
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
       with:
         node-version: 18
-    - uses: actions/setup-dotnet@v2
+    - uses: actions/setup-dotnet@v3
       with:
-        dotnet-version: '6.0.x'
+        dotnet-version: '8.0.x'
     - run: npm ci
       env:
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
     - run: npm run build
     - run: dotnet build
       working-directory: tests/webview2/webview2-app/
+    - name: Update to Evergreen WebView2 Runtime
+      shell: pwsh
+      run: |
+        # See here: https://developer.microsoft.com/en-us/microsoft-edge/webview2/
+        Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile 'setup.exe'
+        Start-Process -FilePath setup.exe -Verb RunAs -Wait
     - run: npm run webview2test
     - run: ./utils/upload_flakiness_dashboard.sh ./test-results/report.json
       if: always()

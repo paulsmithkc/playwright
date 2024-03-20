@@ -46,7 +46,19 @@ export type ScreenshotOptions = {
   style?: string;
 };
 
-function inPagePrepareForScreenshots(screenshotStyle: string, disableAnimations: boolean) {
+function inPagePrepareForScreenshots(screenshotStyle: string, hideCaret: boolean, disableAnimations: boolean, syncAnimations: boolean) {
+  // In WebKit, sync the animations.
+  if (syncAnimations) {
+    const style = document.createElement('style');
+    style.textContent = 'body {}';
+    document.head.appendChild(style);
+    document.documentElement.getBoundingClientRect();
+    style.remove();
+  }
+
+  if (!screenshotStyle && !hideCaret && !disableAnimations)
+    return;
+
   const collectRoots = (root: Document | ShadowRoot, roots: (Document|ShadowRoot)[] = []): (Document|ShadowRoot)[] => {
     roots.push(root);
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
@@ -61,19 +73,39 @@ function inPagePrepareForScreenshots(screenshotStyle: string, disableAnimations:
 
   const roots = collectRoots(document);
   const cleanupCallbacks: (() => void)[] = [];
-  for (const root of roots) {
-    const styleTag = document.createElement('style');
-    styleTag.textContent = screenshotStyle;
-    if (root === document)
-      document.documentElement.append(styleTag);
-    else
-      root.append(styleTag);
 
-    cleanupCallbacks.push(() => {
-      styleTag.remove();
-    });
+  if (screenshotStyle) {
+    for (const root of roots) {
+      const styleTag = document.createElement('style');
+      styleTag.textContent = screenshotStyle;
+      if (root === document)
+        document.documentElement.append(styleTag);
+      else
+        root.append(styleTag);
 
+      cleanupCallbacks.push(() => {
+        styleTag.remove();
+      });
+    }
   }
+
+  if (hideCaret) {
+    const elements = new Map<HTMLElement, { value: string, priority: string }>();
+    for (const root of roots) {
+      root.querySelectorAll('input,textarea,[contenteditable]').forEach(element => {
+        elements.set(element as HTMLElement, {
+          value: (element as HTMLElement).style.getPropertyValue('caret-color'),
+          priority: (element as HTMLElement).style.getPropertyPriority('caret-color')
+        });
+        (element as HTMLElement).style.setProperty('caret-color', 'transparent', 'important');
+      });
+    }
+    cleanupCallbacks.push(() => {
+      for (const [element, value] of elements)
+        element.style.setProperty('caret-color', value.value, value.priority);
+    });
+  }
+
   if (disableAnimations) {
     const infiniteAnimationsToResume: Set<Animation> = new Set();
     const handleAnimations = (root: Document|ShadowRoot): void => {
@@ -172,7 +204,7 @@ export class Screenshotter {
     return this._queue.postTask(async () => {
       progress.log('taking page screenshot');
       const { viewportSize } = await this._originalViewportSize(progress);
-      await this._preparePageForScreenshot(progress, screenshotStyle(options), options.animations === 'disabled');
+      await this._preparePageForScreenshot(progress, options.style, options.caret !== 'initial', options.animations === 'disabled');
       progress.throwIfAborted(); // Avoid restoring after failure - should be done by cleanup.
 
       if (options.fullPage) {
@@ -201,7 +233,7 @@ export class Screenshotter {
       progress.log('taking element screenshot');
       const { viewportSize } = await this._originalViewportSize(progress);
 
-      await this._preparePageForScreenshot(progress, screenshotStyle(options), options.animations === 'disabled');
+      await this._preparePageForScreenshot(progress, options.style, options.caret !== 'initial', options.animations === 'disabled');
       progress.throwIfAborted(); // Do not do extra work.
 
       await handle._waitAndScrollIntoViewIfNeeded(progress, true /* waitForVisible */);
@@ -225,11 +257,12 @@ export class Screenshotter {
     });
   }
 
-  async _preparePageForScreenshot(progress: Progress, screenshotStyle: string, disableAnimations: boolean) {
+  async _preparePageForScreenshot(progress: Progress, screenshotStyle: string | undefined, hideCaret: boolean, disableAnimations: boolean) {
     if (disableAnimations)
       progress.log('  disabled all CSS animations');
+    const syncAnimations = this._page._delegate.shouldToggleStyleSheetToSyncAnimations();
     await Promise.all(this._page.frames().map(async frame => {
-      await frame.nonStallingEvaluateInExistingContext('(' + inPagePrepareForScreenshots.toString() + `)(${JSON.stringify(screenshotStyle)}, ${disableAnimations})`, false, 'utility').catch(() => {});
+      await frame.nonStallingEvaluateInExistingContext('(' + inPagePrepareForScreenshots.toString() + `)(${JSON.stringify(screenshotStyle)}, ${hideCaret}, ${disableAnimations}, ${syncAnimations})`, false, 'utility').catch(() => {});
     }));
     if (!process.env.PW_TEST_SCREENSHOT_NO_FONTS_READY) {
       progress.log('waiting for fonts to load...');
@@ -358,17 +391,4 @@ export function validateScreenshotOptions(options: ScreenshotOptions): 'png' | '
     assert(options.clip.height !== 0, 'Expected options.clip.height not to be 0.');
   }
   return format;
-}
-
-function screenshotStyle(options: ScreenshotOptions): string {
-  const parts: string[] = [];
-  if (options.caret !== 'initial') {
-    parts.push(`
-    *:not(#playwright-aaaaaaaaaa.playwright-bbbbbbbbbbb.playwright-cccccccccc.playwright-dddddddddd.playwright-eeeeeeeee) {
-      caret-color: transparent !important;
-    }`);
-  }
-  if (options.style)
-    parts.push(options.style);
-  return parts.join('\n');
 }

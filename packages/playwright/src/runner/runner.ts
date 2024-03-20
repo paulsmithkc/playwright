@@ -15,8 +15,10 @@
  * limitations under the License.
  */
 
-import { monotonicTime } from 'playwright-core/lib/utils';
-import type { FullResult } from '../../types/testReporter';
+import path from 'path';
+import type { HttpServer, ManualPromise } from 'playwright-core/lib/utils';
+import { isUnderTest, monotonicTime } from 'playwright-core/lib/utils';
+import type { FullResult, TestError } from '../../types/testReporter';
 import { webServerPluginsForConfig } from '../plugins/webServerPlugin';
 import { collectFilesForProject, filterProjects } from './projectUtils';
 import { createReporters } from './reporters';
@@ -24,9 +26,13 @@ import { TestRun, createTaskRunner, createTaskRunnerForList } from './tasks';
 import type { FullConfigInternal } from '../common/config';
 import { colors } from 'playwright-core/lib/utilsBundle';
 import { runWatchModeLoop } from './watchMode';
-import { runUIMode } from './uiMode';
+import { runTestServer } from './testServer';
 import { InternalReporter } from '../reporters/internalReporter';
 import { Multiplexer } from '../reporters/multiplexer';
+import type { Suite } from '../common/test';
+import { wrapReporterAsV2 } from '../reporters/reporterV2';
+import { affectedTestFiles } from '../transform/compilationCache';
+import { installRootRedirect, openTraceInBrowser, openTraceViewerApp } from 'playwright-core/lib/server';
 
 type ProjectConfigWithFiles = {
   name: string;
@@ -37,6 +43,13 @@ type ProjectConfigWithFiles = {
 
 type ConfigListFilesReport = {
   projects: ProjectConfigWithFiles[];
+  cliEntryPoint?: string;
+  error?: TestError;
+};
+
+export type FindRelatedTestFilesReport = {
+  testFiles: string[];
+  errors?: TestError[];
 };
 
 export class Runner {
@@ -46,10 +59,12 @@ export class Runner {
     this._config = config;
   }
 
-  async listTestFiles(projectNames: string[] | undefined): Promise<any> {
-    const projects = filterProjects(this._config.projects, projectNames);
+  async listTestFiles(): Promise<ConfigListFilesReport> {
+    const frameworkPackage = (this._config.config as any)['@playwright/test']?.['packageJSON'];
+    const projects = filterProjects(this._config.projects);
     const report: ConfigListFilesReport = {
-      projects: []
+      projects: [],
+      cliEntryPoint: frameworkPackage ? path.join(path.dirname(frameworkPackage), 'cli.js') : undefined,
     };
     for (const project of projects) {
       report.projects.push({
@@ -70,7 +85,7 @@ export class Runner {
     // Legacy webServer support.
     webServerPluginsForConfig(config).forEach(p => config.plugins.push({ factory: p }));
 
-    const reporter = new InternalReporter(new Multiplexer(await createReporters(config, listOnly ? 'list' : 'run')));
+    const reporter = new InternalReporter(new Multiplexer(await createReporters(config, listOnly ? 'list' : 'test')));
     const taskRunner = listOnly ? createTaskRunnerForList(config, reporter, 'in-process', { failOnLoadErrors: true })
       : createTaskRunner(config, reporter);
 
@@ -104,15 +119,72 @@ export class Runner {
     return status;
   }
 
+  async loadAllTests(mode: 'in-process' | 'out-of-process' = 'in-process'): Promise<{ status: FullResult['status'], suite?: Suite, errors: TestError[] }> {
+    const config = this._config;
+    const errors: TestError[] = [];
+    const reporter = new InternalReporter(new Multiplexer([wrapReporterAsV2({
+      onError(error: TestError) {
+        errors.push(error);
+      }
+    })]));
+    const taskRunner = createTaskRunnerForList(config, reporter, mode, { failOnLoadErrors: true });
+    const testRun = new TestRun(config, reporter);
+    reporter.onConfigure(config.config);
+
+    const taskStatus = await taskRunner.run(testRun, 0);
+    let status: FullResult['status'] = testRun.failureTracker.result();
+    if (status === 'passed' && taskStatus !== 'passed')
+      status = taskStatus;
+    const modifiedResult = await reporter.onEnd({ status });
+    if (modifiedResult && modifiedResult.status)
+      status = modifiedResult.status;
+    await reporter.onExit();
+    return { status, suite: testRun.rootSuite, errors };
+  }
+
   async watchAllTests(): Promise<FullResult['status']> {
     const config = this._config;
     webServerPluginsForConfig(config).forEach(p => config.plugins.push({ factory: p }));
     return await runWatchModeLoop(config);
   }
 
-  async uiAllTests(options: { host?: string, port?: number }): Promise<FullResult['status']> {
+  async runUIMode(options: { host?: string, port?: number }): Promise<FullResult['status']> {
     const config = this._config;
     webServerPluginsForConfig(config).forEach(p => config.plugins.push({ factory: p }));
-    return await runUIMode(config, options);
+    return await runTestServer(config, options, async (server: HttpServer, cancelPromise: ManualPromise<void>) => {
+      await installRootRedirect(server, [], { webApp: 'uiMode.html' });
+      if (options.host !== undefined || options.port !== undefined) {
+        await openTraceInBrowser(server.urlPrefix());
+      } else {
+        const page = await openTraceViewerApp(server.urlPrefix(), 'chromium', {
+          headless: isUnderTest() && process.env.PWTEST_HEADED_FOR_TEST !== '1',
+          persistentContextOptions: {
+            handleSIGINT: false,
+          },
+        });
+        page.on('close', () => cancelPromise.resolve());
+      }
+    });
+  }
+
+  async runTestServer(options: { host?: string, port?: number }): Promise<FullResult['status']> {
+    const config = this._config;
+    webServerPluginsForConfig(config).forEach(p => config.plugins.push({ factory: p }));
+    return await runTestServer(config, options, async server => {
+      // eslint-disable-next-line no-console
+      console.log('Listening on ' + server.urlPrefix().replace('http:', 'ws:') + '/' + server.wsGuid());
+    });
+  }
+
+  async findRelatedTestFiles(mode: 'in-process' | 'out-of-process', files: string[]): Promise<FindRelatedTestFilesReport>  {
+    const result = await this.loadAllTests(mode);
+    if (result.status !== 'passed' || !result.suite)
+      return { errors: result.errors, testFiles: [] };
+
+    const resolvedFiles = (files as string[]).map(file => path.resolve(process.cwd(), file));
+    const override = (this._config.config as any)['@playwright/test']?.['cli']?.['find-related-test-files'];
+    if (override)
+      return await override(resolvedFiles, this._config.config, this._config.configDir, result.suite);
+    return { testFiles: affectedTestFiles(resolvedFiles) };
   }
 }

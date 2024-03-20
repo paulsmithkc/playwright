@@ -96,6 +96,7 @@ test('should merge screenshot assertions', async ({  runUITest }, testInfo) => {
     /expect.toHaveScreenshot[\d.]+m?s/,
     /attach "trace-test-1-actual.png/,
     /After Hooks[\d.]+m?s/,
+    /Worker Cleanup[\d.]+m?s/,
   ]);
 });
 
@@ -172,7 +173,7 @@ test('should show image diff', async ({ runUITest }) => {
   await expect(page.getByText('Diff', { exact: true })).toBeVisible();
   await expect(page.getByText('Actual', { exact: true })).toBeVisible();
   await expect(page.getByText('Expected', { exact: true })).toBeVisible();
-  await expect(page.locator('.image-diff-view .image-wrapper img')).toBeVisible();
+  await expect(page.getByTestId('test-result-image-mismatch').locator('img')).toBeVisible();
 });
 
 test('should show screenshot', async ({ runUITest }) => {
@@ -225,4 +226,62 @@ test('should not fail on internal page logs', async ({ runUITest, server }) => {
     /browserContext.storageState[\d.]+m?s/,
     /After Hooks/,
   ]);
+});
+
+test('should not show caught errors in the errors tab', async ({ runUITest }, testInfo) => {
+  const { page } = await runUITest({
+    'a.spec.ts': `
+      import { test, expect } from '@playwright/test';
+      test('pass', async ({ page }, testInfo) => {
+        await page.setContent("<input id='checkbox' type='checkbox'></input>");
+        await expect(page.locator('input')).toBeChecked({ timeout: 1 }).catch(() => {});
+      });
+    `,
+  });
+
+  await page.getByText('pass').dblclick();
+  const listItem = page.getByTestId('actions-tree').getByRole('listitem');
+
+  await expect(
+      listItem,
+      'action list'
+  ).toHaveText([
+    /Before Hooks[\d.]+m?s/,
+    /page.setContent/,
+    /expect.toBeCheckedlocator.*[\d.]+m?s/,
+    /After Hooks/,
+  ]);
+
+  await page.getByText('Source', { exact: true }).click();
+  await expect(page.locator('.source-line-running')).toContainText('toBeChecked');
+  await expect(page.locator('.CodeMirror-linewidget')).toHaveCount(0);
+
+  await page.getByText('Errors', { exact: true }).click();
+  await expect(page.locator('.tab-errors')).toHaveText('No errors');
+});
+
+test('should reveal errors in the sourcetab', async ({ runUITest }) => {
+  const { page } = await runUITest({
+    'a.spec.ts': `
+      import { test, expect } from '@playwright/test';
+      test('pass', async ({ page }) => {
+        throw new Error('Oh my');
+      });
+    `,
+  });
+
+  await page.getByText('pass').dblclick();
+  const listItem = page.getByTestId('actions-tree').getByRole('listitem');
+
+  await expect(
+      listItem,
+      'action list'
+  ).toContainText([
+    /Before Hooks/,
+    /After Hooks/,
+  ]);
+
+  await page.getByText('Errors', { exact: true }).click();
+  await page.getByText('a.spec.ts:4', { exact: true }).click();
+  await expect(page.locator('.source-line-running')).toContainText(`throw new Error('Oh my');`);
 });

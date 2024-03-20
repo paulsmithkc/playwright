@@ -16,15 +16,16 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { isRegExp } from 'playwright-core/lib/utils';
+import { gracefullyProcessExitDoNotHang, isRegExp } from 'playwright-core/lib/utils';
 import type { ConfigCLIOverrides, SerializedConfig } from './ipc';
 import { requireOrImport } from '../transform/transform';
 import type { Config, Project } from '../../types/test';
-import { errorWithFile } from '../util';
-import { setCurrentConfig } from './globals';
+import { errorWithFile, fileIsModule } from '../util';
+import type { ConfigLocation } from './config';
 import { FullConfigInternal } from './config';
 import { addToCompilationCache } from '../transform/compilationCache';
-import { initializeEsmLoader } from './esmLoaderHost';
+import { initializeEsmLoader, registerESMLoader } from './esmLoaderHost';
+import { execArgvWithExperimentalLoaderOptions, execArgvWithoutExperimentalLoaderOptions } from '../transform/esmUtils';
 
 const kDefineConfigWasUsed = Symbol('defineConfigWasUsed');
 export const defineConfig = (...configs: any[]) => {
@@ -41,6 +42,10 @@ export const defineConfig = (...configs: any[]) => {
       use: {
         ...result.use,
         ...config.use,
+      },
+      build: {
+        ...result.build,
+        ...config.build,
       },
       webServer: [
         ...(Array.isArray(result.webServer) ? result.webServer : (result.webServer ? [result.webServer] : [])),
@@ -79,59 +84,34 @@ export const defineConfig = (...configs: any[]) => {
   return result;
 };
 
-export class ConfigLoader {
-  private _configCLIOverrides: ConfigCLIOverrides;
-  private _fullConfig: FullConfigInternal | undefined;
-
-  constructor(configCLIOverrides?: ConfigCLIOverrides) {
-    this._configCLIOverrides = configCLIOverrides || {};
-  }
-
-  static async deserialize(data: SerializedConfig): Promise<FullConfigInternal> {
+export async function deserializeConfig(data: SerializedConfig): Promise<FullConfigInternal> {
+  if (data.compilationCache)
     addToCompilationCache(data.compilationCache);
 
-    const loader = new ConfigLoader(data.configCLIOverrides);
-    const config = data.configFile ? await loader.loadConfigFile(data.configFile) : await loader.loadEmptyConfig(data.configDir);
-    await initializeEsmLoader();
-    return config;
-  }
-
-  async loadConfigFile(file: string, ignoreProjectDependencies = false): Promise<FullConfigInternal> {
-    if (this._fullConfig)
-      throw new Error('Cannot load two config files');
-    const config = await requireOrImportDefaultObject(file) as Config;
-    const fullConfig = await this._loadConfig(config, path.dirname(file), file);
-    setCurrentConfig(fullConfig);
-    if (ignoreProjectDependencies) {
-      for (const project of fullConfig.projects) {
-        project.deps = [];
-        project.teardown = undefined;
-      }
-    }
-    this._fullConfig = fullConfig;
-    return fullConfig;
-  }
-
-  async loadEmptyConfig(configDir: string): Promise<FullConfigInternal> {
-    const fullConfig = await this._loadConfig({}, configDir);
-    setCurrentConfig(fullConfig);
-    return fullConfig;
-  }
-
-  private async _loadConfig(config: Config, configDir: string, configFile?: string): Promise<FullConfigInternal> {
-    // 1. Validate data provided in the config file.
-    validateConfig(configFile || '<default config>', config);
-    const fullConfig = new FullConfigInternal(configDir, configFile, config, this._configCLIOverrides);
-    fullConfig.defineConfigWasUsed = !!(config as any)[kDefineConfigWasUsed];
-    return fullConfig;
-  }
+  const config = await loadConfig(data.location, data.configCLIOverrides);
+  await initializeEsmLoader();
+  return config;
 }
 
-async function requireOrImportDefaultObject(file: string) {
-  let object = await requireOrImport(file);
+async function loadUserConfig(location: ConfigLocation): Promise<Config> {
+  let object = location.resolvedConfigFile ? await requireOrImport(location.resolvedConfigFile) : {};
   if (object && typeof object === 'object' && ('default' in object))
     object = object['default'];
-  return object;
+  return object as Config;
+}
+
+export async function loadConfig(location: ConfigLocation, overrides?: ConfigCLIOverrides, ignoreProjectDependencies = false): Promise<FullConfigInternal> {
+  const userConfig = await loadUserConfig(location);
+  validateConfig(location.resolvedConfigFile || '<default config>', userConfig);
+  const fullConfig = new FullConfigInternal(location, userConfig, overrides || {});
+  fullConfig.defineConfigWasUsed = !!(userConfig as any)[kDefineConfigWasUsed];
+  if (ignoreProjectDependencies) {
+    for (const project of fullConfig.projects) {
+      project.deps = [];
+      project.teardown = undefined;
+    }
+  }
+  return fullConfig;
 }
 
 function validateConfig(file: string, config: Config) {
@@ -306,7 +286,7 @@ function validateProject(file: string, project: Project, title: string) {
   }
 }
 
-export function resolveConfigFile(configFileOrDirectory: string): string | null {
+export function resolveConfigFile(configFileOrDirectory: string): string | undefined {
   const resolveConfig = (configFile: string) => {
     if (fs.existsSync(configFile))
       return configFile;
@@ -328,10 +308,75 @@ export function resolveConfigFile(configFileOrDirectory: string): string | null 
     if (configFile)
       return configFile;
     // If there is no config, assume this as a root testing directory.
-    return null;
+    return undefined;
   } else {
     // When passed a file, it must be a config file.
     const configFile = resolveConfig(configFileOrDirectory);
     return configFile!;
   }
+}
+
+export async function loadConfigFromFileRestartIfNeeded(configFile: string | undefined, overrides?: ConfigCLIOverrides, ignoreDeps?: boolean): Promise<FullConfigInternal | null> {
+  const configFileOrDirectory = configFile ? path.resolve(process.cwd(), configFile) : process.cwd();
+  const resolvedConfigFile = resolveConfigFile(configFileOrDirectory);
+  if (restartWithExperimentalTsEsm(resolvedConfigFile))
+    return null;
+  const location: ConfigLocation = {
+    configDir: resolvedConfigFile ? path.dirname(resolvedConfigFile) : configFileOrDirectory,
+    resolvedConfigFile,
+  };
+  return await loadConfig(location, overrides, ignoreDeps);
+}
+
+export async function loadEmptyConfigForMergeReports() {
+  // Merge reports is "different" for no good reason. It should not pick up local config from the cwd.
+  return await loadConfig({ configDir: process.cwd() });
+}
+
+export function restartWithExperimentalTsEsm(configFile: string | undefined, force: boolean = false): boolean {
+  // Opt-out switch.
+  if (process.env.PW_DISABLE_TS_ESM)
+    return false;
+
+  // There are two esm loader APIs:
+  // - Older API that needs a process restart. Available in Node 16, 17, and non-latest 18, 19 and 20.
+  // - Newer API that works in-process. Available in Node 21+ and latest 18, 19 and 20.
+
+  // First check whether we have already restarted with the ESM loader from the older API.
+  if ((globalThis as any).__esmLoaderPortPreV20) {
+    // clear execArgv after restart, so that childProcess.fork in user code does not inherit our loader.
+    process.execArgv = execArgvWithoutExperimentalLoaderOptions();
+    return false;
+  }
+
+  // Now check for the newer API presence.
+  if (!require('node:module').register) {
+    // Older API is experimental, only supported on Node 16+.
+    const nodeVersion = +process.versions.node.split('.')[0];
+    if (nodeVersion < 16)
+      return false;
+
+    // With older API requiring a process restart, do so conditionally on the config.
+    const configIsModule = !!configFile && fileIsModule(configFile);
+    if (!force && !configIsModule)
+      return false;
+
+    const innerProcess = (require('child_process') as typeof import('child_process')).fork(require.resolve('../../cli'), process.argv.slice(2), {
+      env: {
+        ...process.env,
+        PW_TS_ESM_LEGACY_LOADER_ON: '1',
+      },
+      execArgv: execArgvWithExperimentalLoaderOptions(),
+    });
+
+    innerProcess.on('close', (code: number | null) => {
+      if (code !== 0 && code !== null)
+        gracefullyProcessExitDoNotHang(code);
+    });
+    return true;
+  }
+
+  // With the newer API, always enable the ESM loader, because it does not need a restart.
+  registerESMLoader();
+  return false;
 }

@@ -23,6 +23,7 @@ import { ErrorsTab, useErrorsTabModel } from './errorsTab';
 import { ConsoleTab, useConsoleTabModel } from './consoleTab';
 import type * as modelUtil from './modelUtil';
 import type { ActionTraceEventInContext, MultiTraceModel } from './modelUtil';
+import type { StackFrame } from '@protocol/channels';
 import { NetworkTab, useNetworkTabModel } from './networkTab';
 import { SnapshotTab } from './snapshotTab';
 import { SourceTab } from './sourceTab';
@@ -42,7 +43,6 @@ import type { UITestStatus } from './testUtils';
 
 export const Workbench: React.FunctionComponent<{
   model?: MultiTraceModel,
-  hideStackFrames?: boolean,
   showSourcesFirst?: boolean,
   rootDir?: string,
   fallbackLocation?: modelUtil.SourceLocation,
@@ -50,8 +50,10 @@ export const Workbench: React.FunctionComponent<{
   onSelectionChanged?: (action: ActionTraceEventInContext) => void,
   isLive?: boolean,
   status?: UITestStatus,
-}> = ({ model, hideStackFrames, showSourcesFirst, rootDir, fallbackLocation, initialSelection, onSelectionChanged, isLive, status }) => {
-  const [selectedAction, setSelectedAction] = React.useState<ActionTraceEventInContext | undefined>(undefined);
+  inert?: boolean,
+}> = ({ model, showSourcesFirst, rootDir, fallbackLocation, initialSelection, onSelectionChanged, isLive, status, inert }) => {
+  const [selectedAction, setSelectedActionImpl] = React.useState<ActionTraceEventInContext | undefined>(undefined);
+  const [revealedStack, setRevealedStack] = React.useState<StackFrame[] | undefined>(undefined);
   const [highlightedAction, setHighlightedAction] = React.useState<ActionTraceEventInContext | undefined>();
   const [highlightedEntry, setHighlightedEntry] = React.useState<Entry | undefined>();
   const [selectedNavigatorTab, setSelectedNavigatorTab] = React.useState<string>('actions');
@@ -61,6 +63,11 @@ export const Workbench: React.FunctionComponent<{
   const activeAction = model ? highlightedAction || selectedAction : undefined;
   const [selectedTime, setSelectedTime] = React.useState<Boundaries | undefined>();
   const [sidebarLocation, setSidebarLocation] = useSetting<'bottom' | 'right'>('propertiesSidebarLocation', 'bottom');
+
+  const setSelectedAction = React.useCallback((action: ActionTraceEventInContext | undefined) => {
+    setSelectedActionImpl(action);
+    setRevealedStack(action?.stack);
+  }, [setSelectedActionImpl, setRevealedStack]);
 
   const sources = React.useMemo(() => model?.sources || new Map(), [model]);
 
@@ -137,8 +144,11 @@ export const Workbench: React.FunctionComponent<{
     id: 'errors',
     title: 'Errors',
     errorCount: errorsModel.errors.size,
-    render: () => <ErrorsTab errorsModel={errorsModel} sdkLanguage={sdkLanguage} revealInSource={action => {
-      setSelectedAction(action);
+    render: () => <ErrorsTab errorsModel={errorsModel} sdkLanguage={sdkLanguage} revealInSource={error => {
+      if (error.action)
+        setSelectedAction(error.action);
+      else
+        setRevealedStack(error.stack);
       selectPropertiesTab('source');
     }} />
   };
@@ -146,10 +156,10 @@ export const Workbench: React.FunctionComponent<{
     id: 'source',
     title: 'Source',
     render: () => <SourceTab
-      action={activeAction}
+      stack={revealedStack}
       sources={sources}
-      hideStackFrames={hideStackFrames}
       rootDir={rootDir}
+      stackFrameLocation={sidebarLocation === 'bottom' ? 'right' : 'bottom'}
       fallbackLocation={fallbackLocation} />
   };
   const consoleTab: TabbedPaneTabModel = {
@@ -204,7 +214,7 @@ export const Workbench: React.FunctionComponent<{
   else if (model && model.wallTime)
     time = Date.now() - model.wallTime;
 
-  return <div className='vbox workbench'>
+  return <div className='vbox workbench' {...(inert ? { inert: 'true' } : {})}>
     <Timeline
       model={model}
       boundaries={boundaries}

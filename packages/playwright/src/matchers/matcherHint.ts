@@ -25,7 +25,7 @@ export function matcherHint(state: ExpectMatcherContext, locator: Locator | unde
   if (timeout)
     header = colors.red(`Timed out ${timeout}ms waiting for `) + header;
   if (locator)
-    header += `Locator: ${locator}\n`;
+    header += `Locator: ${String(locator)}\n`;
   return header;
 }
 
@@ -49,6 +49,7 @@ export class ExpectError extends Error {
     log?: string[];
     timeout?: number;
   };
+
   constructor(jestError: ExpectError, customMessage: string, stackFrames: StackFrame[]) {
     super('');
     // Copy to erase the JestMatcherError constructor name from the console.log(error).
